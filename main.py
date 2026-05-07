@@ -1,20 +1,3 @@
-# Stock / Crypto Analysis Agent
-# Requires Python 3.10+. No third-party packages needed.
-#
-# Setup:
-#   export GROQ_API_KEY="gsk_your_key_here"
-#
-# Run:
-#   python main.py "Analyze AAPL"
-#   python main.py "Should I buy Bitcoin?"
-#   python main.py --verbose --output-dir results "Analyze NVDA"
-#   python main.py --news-limit 10 "Analyze ETH"
-#
-# Outputs written to ./outputs/ (or --output-dir):
-#   report_<TICKER>_<TIMESTAMP>.md   — human-readable report
-#   report_<TICKER>_<TIMESTAMP>.json — structured data
-#   trace_<TICKER>_<TIMESTAMP>.json  — full agent state, every step's input/output
-
 import argparse
 import datetime as dt
 import json
@@ -33,10 +16,6 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_BASE_URL = os.getenv("GROQ_API_BASE_URL", "https://api.groq.com/openai/v1").rstrip("/")
 DEFAULT_NEWS_LIMIT = 6
 
-
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
 
 def compact_json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
@@ -80,55 +59,6 @@ def wait_seconds_from_rate_limit(error_body: str) -> float:
         return float(match.group(1)) + 1.0
     return 20.0
 
-
-def http_json(url: str, timeout: int = 20) -> Any:
-    request = urllib.request.Request(url, headers={"User-Agent": "college-stock-agent/1.0"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def http_text(url: str, timeout: int = 20) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "college-stock-agent/1.0"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
-
-
-def round_number(value: Any, digits: int = 4) -> float | None:
-    try:
-        return None if value is None else round(float(value), digits)
-    except (TypeError, ValueError):
-        return None
-
-
-def trace_step(
-    state: dict[str, Any],
-    number: int,
-    name: str,
-    kind: str,
-    input_data: dict[str, Any],
-    output_data: dict[str, Any],
-    verbose: bool,
-) -> None:
-    state["trace"].append(
-        {
-            "step": number,
-            "name": name,
-            "kind": kind,
-            "input": input_data,
-            "output": output_data,
-            "time": dt.datetime.now(dt.timezone.utc).isoformat(),
-        }
-    )
-    if verbose:
-        print(f"\nStep {number}: {name} ({kind})")
-        print(pretty_json(output_data))
-
-
-# ---------------------------------------------------------------------------
-# LLM caller
-# Sends system + user prompt to Groq, enforces JSON response format,
-# retries automatically on rate-limit (HTTP 429).
-# ---------------------------------------------------------------------------
 
 def call_groq_json(
     step_name: str,
@@ -196,13 +126,57 @@ def call_groq_json(
     raise RuntimeError(f"Groq request failed after retries in {step_name}.")
 
 
+def http_json(url: str, timeout: int = 20) -> Any:
+    request = urllib.request.Request(url, headers={"User-Agent": "college-stock-agent/1.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def http_text(url: str, timeout: int = 20) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": "college-stock-agent/1.0"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def round_number(value: Any, digits: int = 4) -> float | None:
+    try:
+        return None if value is None else round(float(value), digits)
+    except (TypeError, ValueError):
+        return None
+
+
+def trace_step(
+    state: dict[str, Any],
+    number: int,
+    name: str,
+    kind: str,
+    input_data: dict[str, Any],
+    output_data: dict[str, Any],
+    verbose: bool,
+) -> None:
+    state["trace"].append(
+        {
+            "step": number,
+            "name": name,
+            "kind": kind,
+            "input": input_data,
+            "output": output_data,
+            "time": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+    )
+    if verbose:
+        print(f"\nStep {number}: {name} ({kind})")
+        print(pretty_json(output_data))
 # ---------------------------------------------------------------------------
-# Output normalisation
-# Llama often returns 0-1 floats for fields that should be 0-100 integers.
-# These helpers fix that post-call so downstream steps always see the right range.
+# Numeric field normalisation
+#
+# Llama (and most LLMs) default to 0-1 floats for "confidence" and similar
+# fields even when the prompt says 0-100. We fix this post-call rather than
+# hoping the model complies, since it affects every downstream step.
 # ---------------------------------------------------------------------------
 
 def _normalise_confidence_fields(output: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    """Convert 0-1 floats to 0-100 integers for any confidence-style field."""
     for field in fields:
         val = output.get(field)
         if val is None:
@@ -219,6 +193,7 @@ def _normalise_confidence_fields(output: dict[str, Any], fields: list[str]) -> d
 
 
 def _normalise_reconciliation_score(output: dict[str, Any]) -> dict[str, Any]:
+    """Reconciliation score is -100 to +100. Normalise 0-1 floats to that scale."""
     val = output.get("reconciliation_score")
     if val is None:
         return output
@@ -234,6 +209,7 @@ def _normalise_reconciliation_score(output: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalise_penalty(output: dict[str, Any]) -> dict[str, Any]:
+    """Confidence penalty should be an integer number of points (0-50 range)."""
     val = output.get("suggested_confidence_penalty")
     if val is None:
         return output
@@ -249,6 +225,7 @@ def _normalise_penalty(output: dict[str, Any]) -> dict[str, Any]:
 
 
 def _coerce_string_fields(output: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    """If the model returned a dict/list for a field that should be a string, serialise it."""
     for field in fields:
         val = output.get(field)
         if val is not None and not isinstance(val, str):
@@ -261,8 +238,9 @@ def _coerce_string_fields(output: dict[str, Any], fields: list[str]) -> dict[str
     return output
 
 
+
 # ---------------------------------------------------------------------------
-# Step 1 — LLM: parse and validate the user's ticker/asset request
+# Step 1 — LLM: parse and validate user request
 # ---------------------------------------------------------------------------
 
 def step_1_parse_request(state: dict[str, Any], verbose: bool) -> None:
@@ -292,7 +270,7 @@ def step_1_parse_request(state: dict[str, Any], verbose: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 2 — Tool: fetch live market data from Yahoo Finance (stocks) or CoinGecko (crypto)
+# Step 2 — Tool: fetch market data (also preserves historical close series)
 # ---------------------------------------------------------------------------
 
 def fetch_stock_market_data(symbol: str) -> dict[str, Any]:
@@ -306,7 +284,10 @@ def fetch_stock_market_data(symbol: str) -> dict[str, Any]:
         "change_percent_1d": None,
         "volume": None,
         "market_cap": None,
-        "_closes": [],   # kept for Step 2b; stripped from trace
+        "fifty_two_week_low": None,
+        "fifty_two_week_high": None,
+        # Full series kept for the technicals tool in Step 2b
+        "_closes": [],
         "_volumes": [],
         "source_urls": [],
         "errors": [],
@@ -362,6 +343,7 @@ def fetch_crypto_market_data(parsed: dict[str, Any]) -> dict[str, Any]:
         "change_percent_7d": None,
         "volume": None,
         "market_cap": None,
+        # Crypto historical closes fetched separately for technicals
         "_closes": [],
         "_volumes": [],
         "source_urls": [],
@@ -371,6 +353,7 @@ def fetch_crypto_market_data(parsed: dict[str, Any]) -> dict[str, Any]:
         result["errors"].append("No CoinGecko id available from Step 1.")
         return result
 
+    # Current market snapshot
     snapshot_url = (
         "https://api.coingecko.com/api/v3/coins/markets?"
         + urllib.parse.urlencode(
@@ -405,13 +388,15 @@ def fetch_crypto_market_data(parsed: dict[str, Any]) -> dict[str, Any]:
         result["errors"].append(str(exc))
         return result
 
-    # 90-day OHLC for technicals (free endpoint, daily candles)
+    # 90-day OHLC series for technicals (free endpoint, daily candles)
     ohlc_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/ohlc?vs_currency=usd&days=90"
     result["source_urls"].append(ohlc_url)
     try:
         ohlc = http_json(ohlc_url)
+        # Each entry: [timestamp, open, high, low, close]
         closes = [round_number(row[4]) for row in ohlc if len(row) >= 5]
         result["_closes"] = [c for c in closes if c is not None]
+        # CoinGecko OHLC doesn't include volume per candle; leave _volumes empty
     except Exception as exc:
         result["errors"].append(f"OHLC fetch failed (technicals may be partial): {exc}")
 
@@ -426,14 +411,18 @@ def step_2_fetch_market_data(state: dict[str, Any], verbose: bool) -> None:
     else:
         output = fetch_stock_market_data(str(symbol).upper())
     state["market_data"] = output
-    # Strip the raw price series from the trace — Step 2b consumes them directly
+    # Expose only the public-facing fields to the trace (strip the _ prefixed series)
     trace_output = {k: v for k, v in output.items() if not k.startswith("_")}
     trace_step(state, 2, "Tool fetch market data", "tool", {"parsed_request": parsed}, trace_output, verbose)
 
 
 # ---------------------------------------------------------------------------
-# Step 2b — Tool: compute technical indicators from the historical price series
-# Pure Python, no LLM, no network. Produces RSI, MACD, Bollinger Bands, SMAs.
+# Step 2b — Tool: compute technical indicators from the historical series
+#
+# This is a pure-Python computation tool. No LLM call, no network request.
+# It takes the raw close/volume series stored in state["market_data"] and
+# produces a structured dict of well-known indicators that the LLM in Step 5
+# can reason about directly, rather than being handed a bare price number.
 # ---------------------------------------------------------------------------
 
 def _sma(series: list[float], period: int) -> float | None:
@@ -443,6 +432,7 @@ def _sma(series: list[float], period: int) -> float | None:
 
 
 def _ema(series: list[float], period: int) -> float | None:
+    """Exponential moving average of the last `period` values in the series."""
     if len(series) < period:
         return None
     k = 2.0 / (period + 1)
@@ -453,6 +443,7 @@ def _ema(series: list[float], period: int) -> float | None:
 
 
 def _rsi(closes: list[float], period: int = 14) -> float | None:
+    """Wilder's RSI. Returns None when there is insufficient data."""
     if len(closes) < period + 1:
         return None
     deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
@@ -470,6 +461,7 @@ def _rsi(closes: list[float], period: int = 14) -> float | None:
 
 
 def _macd(closes: list[float]) -> dict[str, float | None]:
+    """Standard MACD: EMA(12) - EMA(26), signal = EMA(9) of MACD line."""
     if len(closes) < 26:
         return {"macd_line": None, "signal_line": None, "histogram": None}
 
@@ -485,6 +477,7 @@ def _macd(closes: list[float]) -> dict[str, float | None]:
 
     ema12 = rolling_ema(closes, k12, 12)
     ema26 = rolling_ema(closes, k26, 26)
+    # Align: ema12 is len(closes)-11 long, ema26 is len(closes)-25 long
     offset = len(ema12) - len(ema26)
     macd_line = [ema12[offset + i] - ema26[i] for i in range(len(ema26))]
 
@@ -502,6 +495,7 @@ def _macd(closes: list[float]) -> dict[str, float | None]:
 
 
 def _bollinger_bands(closes: list[float], period: int = 20) -> dict[str, float | None]:
+    """Bollinger Bands: middle = SMA(20), upper/lower = ±2σ."""
     if len(closes) < period:
         return {"upper": None, "middle": None, "lower": None, "band_width_pct": None}
     window = closes[-period:]
@@ -516,6 +510,7 @@ def _bollinger_bands(closes: list[float], period: int = 20) -> dict[str, float |
 
 
 def _volume_ratio(volumes: list[float], short: int = 5, long: int = 20) -> float | None:
+    """Ratio of recent average volume to longer-term average. >1 = rising interest."""
     if len(volumes) < long:
         return None
     avg_short = sum(volumes[-short:]) / short
@@ -524,6 +519,12 @@ def _volume_ratio(volumes: list[float], short: int = 5, long: int = 20) -> float
 
 
 def compute_technicals(closes: list[float], volumes: list[float]) -> dict[str, Any]:
+    """
+    Pure-Python technical indicator tool.
+    Receives the historical close and volume series from Step 2 and returns a
+    structured dict of indicators. The LLM in Step 5 receives this dict as
+    concrete facts rather than being asked to estimate technicals itself.
+    """
     if not closes or len(closes) < 2:
         return {"ok": False, "error": "Insufficient price history for technical analysis.", "indicators": {}}
 
@@ -549,9 +550,8 @@ def compute_technicals(closes: list[float], volumes: list[float]) -> dict[str, A
         "volume_ratio_5d_20d": _volume_ratio(volumes, 5, 20) if volumes else None,
     }
 
-    # Plain-English signal labels derived from the numbers.
-    # These go into state["technicals"]["signals"] and are fed directly to Step 5,
-    # so the LLM reasons from interpreted facts rather than raw floats.
+    # Plain-English signals derived from the numbers — these reduce the
+    # burden on the LLM to interpret raw values and make Step 5 more reliable.
     signals: list[str] = []
     rsi = indicators["rsi_14"]
     if rsi is not None:
@@ -609,7 +609,7 @@ def step_2b_compute_technicals(state: dict[str, Any], verbose: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — Tool: fetch recent news headlines from Google News RSS
+# Step 3 — Tool: fetch recent news headlines
 # ---------------------------------------------------------------------------
 
 def step_3_fetch_headlines(state: dict[str, Any], verbose: bool, limit: int) -> None:
@@ -651,7 +651,7 @@ def step_3_fetch_headlines(state: dict[str, Any], verbose: bool, limit: int) -> 
 
 
 # ---------------------------------------------------------------------------
-# Step 4 — LLM: classify headline sentiment
+# Step 4 — LLM: sentiment analysis of headlines
 # ---------------------------------------------------------------------------
 
 def compact_headlines(news: dict[str, Any]) -> dict[str, Any]:
@@ -690,8 +690,14 @@ def step_4_analyze_sentiment(state: dict[str, Any], verbose: bool) -> None:
 
 # ---------------------------------------------------------------------------
 # Step 5 — LLM: reconcile technicals, market data, and sentiment
-# Does NOT issue a recommendation — its only job is to describe what the
-# three signal sources say and flag where they agree or contradict.
+#
+# The key design change from the original: this step now receives the
+# pre-computed technical indicators from Step 2b as concrete numbers with
+# plain-English signals already attached. The LLM's job is genuine
+# multi-signal reconciliation — deciding whether the three sources
+# (technicals, market data, sentiment) agree or contradict — rather than
+# interpreting a bare price figure. This is the step that most benefits
+# from being a separate LLM call.
 # ---------------------------------------------------------------------------
 
 def step_5_reconcile_signals(state: dict[str, Any], verbose: bool) -> None:
@@ -720,17 +726,18 @@ def step_5_reconcile_signals(state: dict[str, Any], verbose: bool) -> None:
         "sentiment_from_step_4": state["sentiment_analysis"],
     }
     keys = [
-        "signal_agreement",       # "aligned_bullish" | "aligned_bearish" | "mixed" | "contradictory"
-        "technical_reading",      # plain-English summary of what the technicals say
-        "sentiment_reading",      # plain-English summary of what sentiment says
-        "conflict_notes",         # any contradictions worth flagging to the next step
+        "signal_agreement",       # string: "aligned_bullish" | "aligned_bearish" | "mixed" | "contradictory"
+        "technical_reading",      # string: plain-English summary of what the technicals say
+        "sentiment_reading",      # string: plain-English summary of what sentiment says
+        "conflict_notes",         # string: any contradictions worth flagging to the final step
         "key_risks",              # array of strings
         "key_opportunities",      # array of strings
-        "data_quality_notes",     # flags when tool data was missing or partial
+        "data_quality_notes",     # string: flags when tool data was missing or partial
         "reconciliation_score",   # integer: -100 (very bearish) to +100 (very bullish)
         "confidence",             # integer: 0-100
     ]
     output, metadata = call_groq_json("step_5_reconcile_signals", system, payload, keys, 900)
+    # Normalise numeric fields: model sometimes returns 0-1 floats despite instructions
     output = _normalise_confidence_fields(output, ["confidence"])
     output = _normalise_reconciliation_score(output)
     state["reconciled_signals"] = output
@@ -739,7 +746,7 @@ def step_5_reconcile_signals(state: dict[str, Any], verbose: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 6 — LLM: draft a recommendation from the reconciled picture
+# Step 6 — LLM: draft final recommendation
 # ---------------------------------------------------------------------------
 
 def step_6_draft_recommendation(state: dict[str, Any], verbose: bool) -> None:
@@ -772,32 +779,41 @@ def step_6_draft_recommendation(state: dict[str, Any], verbose: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 7 — LLM: steelman the opposite case
-# Argues against whatever Step 6 recommended. A single prompt cannot
-# critique its own output — this separate call is what enables that.
+# Step 7 — LLM: confidence audit
+#
+# This step audits whether the draft's stated confidence is actually justified
+# by the evidence. It is NOT forced to argue the opposite case — if signals
+# are strongly aligned, it should say so and apply little or no penalty.
+# The penalty is proportional to real gaps: contradicting signals, thin data,
+# ignored risks. Vague market uncertainty does not count. A single prompt
+# cannot audit its own confidence, but a chained call can do it honestly.
 # ---------------------------------------------------------------------------
 
 def step_7_critique_recommendation(state: dict[str, Any], verbose: bool) -> None:
     draft = state["draft_report"]
-    opposite = {"BUY": "SELL or HOLD", "SELL": "BUY or HOLD", "HOLD": "BUY or SELL"}.get(
-        draft.get("recommendation", ""), "the opposite position"
-    )
     draft_conf = draft.get("confidence", 50)
     system = (
-        f"You are Step 7, a critical analyst reviewing a draft recommendation. "
+        f"You are Step 7, a Ruthless risk auditor reviewing a draft recommendation. "
         f"The draft says {draft.get('recommendation')} with confidence {draft_conf}/100. "
-        f"Your job is to argue for {opposite}. "
-        "Identify every weakness in the draft's reasoning: signals it may have over-weighted, "
-        "risks it downplayed, data gaps it ignored, and concrete scenarios under which its thesis breaks. "
-        "Be specific — cite actual indicator values and headline themes, not vague concerns. "
-        "You are not producing a final recommendation — you are stress-testing the draft "
-        "so the final step can make a more balanced decision. "
+        # "Your job is NOT to argue for the opposite position. "
+        "Your job is to assess whether the stated confidence is justified by the evidence. "
+        "Ignore any external bias or previous conclusions; use only your own independent reasoning "
+        "to provide a clean, unbiased review based strictly on the provided data. "
+        "Ask: are there real data gaps, contradicting signals, or thin evidence that should "
+        "reduce confidence? If the signals are strongly aligned and the evidence is solid, "
+        "say so — a minor critique with a low penalty (0-5 pts) is a valid and correct output. "
+        "Only apply a large penalty when you find specific, concrete problems: a signal the "
+        "draft over-weighted relative to its actual strength, a material risk it ignored, a "
+        "data gap that would change the call if filled, or a realistic scenario where the "
+        "thesis breaks. Vague market uncertainty does not justify a penalty. "
+        "Be specific — cite actual indicator values and reconciliation scores from the input. "
         "STRICT TYPE RULES: "
-        "counter_thesis must be a plain-English STRING of 2-4 sentences. "
+        "counter_thesis must be a plain-English STRING of 2-4 sentences summarising your audit finding. "
         "overweighted_signals, underweighted_risks, data_gaps_that_matter, scenarios_where_draft_fails "
-        "must all be arrays of short plain-English strings. "
+        "must all be arrays of short plain-English strings — empty arrays are valid if nothing applies. "
         "critique_severity must be exactly one of: minor, moderate, major. "
-        "suggested_confidence_penalty must be an INTEGER number of points to deduct (0-40). "
+        "suggested_confidence_penalty must be an INTEGER number of points to deduct (0-40); "
+        "use 0-5 for well-supported drafts, 10-20 for moderate gaps, 25-40 only for major flaws. "
         "JSON only."
     )
     payload = {
@@ -806,14 +822,14 @@ def step_7_critique_recommendation(state: dict[str, Any], verbose: bool) -> None
         "reconciled_signals_from_step_5": state["reconciled_signals"],
     }
     keys = [
-        "draft_recommendation",          # echo back what we're critiquing
-        "counter_thesis",                # main argument against the draft
-        "overweighted_signals",          # what the draft relied on too heavily
-        "underweighted_risks",           # risks the draft glossed over
-        "data_gaps_that_matter",         # missing info that would change the call
-        "scenarios_where_draft_fails",   # concrete situations that invalidate the thesis
-        "critique_severity",             # "minor" | "moderate" | "major"
-        "suggested_confidence_penalty",  # integer points to subtract from draft confidence
+        "draft_recommendation",          # string: echo back what you're critiquing
+        "counter_thesis",                # string: the main argument against the draft
+        "overweighted_signals",          # array: what the draft relied on too heavily
+        "underweighted_risks",           # array: risks the draft glossed over
+        "data_gaps_that_matter",         # array: missing information that would change the call
+        "scenarios_where_draft_fails",   # array: concrete situations that invalidate the thesis
+        "critique_severity",             # string: "minor" | "moderate" | "major"
+        "suggested_confidence_penalty",  # integer: points to subtract from draft confidence
     ]
     output, metadata = call_groq_json("step_7_critique_recommendation", system, payload, keys, 800)
     output = _normalise_penalty(output)
@@ -824,13 +840,14 @@ def step_7_critique_recommendation(state: dict[str, Any], verbose: bool) -> None
 
 
 # ---------------------------------------------------------------------------
-# Step 8 — LLM: final report — reconcile draft and critique, lock in the call
+# Step 8 — LLM: final report reconciling draft and critique
 # ---------------------------------------------------------------------------
 
 def step_8_final_report(state: dict[str, Any], verbose: bool) -> None:
     draft = state["draft_report"]
     critique = state["critique"]
     raw_penalty = critique.get("suggested_confidence_penalty", 0) or 0
+    # Compute the actual adjusted confidence ceiling the model must stay under
     draft_conf = draft.get("confidence", 50)
     try:
         adjusted_ceiling = max(0, int(draft_conf) - int(raw_penalty))
@@ -860,7 +877,7 @@ def step_8_final_report(state: dict[str, Any], verbose: bool) -> None:
     keys = [
         "ticker", "asset_name", "recommendation", "confidence",
         "thesis", "evidence", "catalysts", "risks", "data_gaps",
-        "critique_response",
+        "critique_response",   # 3-5 sentences: did the draft hold up and why?
         "disclaimer",
     ]
     output, metadata = call_groq_json("step_8_final_report", system, payload, keys, 900)
@@ -872,7 +889,7 @@ def step_8_final_report(state: dict[str, Any], verbose: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Invalid input fast-exit (Step 1 returned is_valid: false)
+# Invalid input fast-exit
 # ---------------------------------------------------------------------------
 
 def invalid_input_report(state: dict[str, Any], verbose: bool) -> None:
@@ -899,6 +916,7 @@ def invalid_input_report(state: dict[str, Any], verbose: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def _fmt_pct(val: Any, decimals: int = 2) -> str:
+    """Format a percentage value cleanly, handling None."""
     if val is None:
         return "N/A"
     try:
@@ -919,6 +937,7 @@ def _fmt_price(val: Any, currency: str = "") -> str:
 
 
 def _fmt_large(val: Any) -> str:
+    """Format large numbers (volume, market cap) with B/M suffixes."""
     if val is None:
         return "N/A"
     try:
@@ -945,6 +964,7 @@ def _bullet_list(items: Any) -> str:
 
 
 def _str_field(val: Any) -> str:
+    """Ensure a field renders as clean prose, not a raw dict/list repr."""
     if val is None:
         return "N/A"
     if isinstance(val, str):
@@ -991,12 +1011,14 @@ def markdown_report(state: dict[str, Any]) -> str:
     macd = indicators.get("macd", {}) or {}
     bb = indicators.get("bollinger", {}) or {}
 
+    # Sentiment themes: handle list or string
     themes_raw = sentiment.get("themes", [])
     if isinstance(themes_raw, list):
         themes_str = ", ".join(themes_raw) if themes_raw else "N/A"
     else:
         themes_str = str(themes_raw) if themes_raw else "N/A"
 
+    # Sentiment score: display as 0-1 float (that's what step 4 returns)
     sent_score = sentiment.get("score")
     sent_score_str = f"{float(sent_score):.2f}" if sent_score is not None else "N/A"
 
@@ -1153,7 +1175,7 @@ def write_outputs(state: dict[str, Any], output_dir: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator — runs the full chain and writes outputs
+# Orchestrator
 # ---------------------------------------------------------------------------
 
 def run_agent(user_input: str, output_dir: str, news_limit: int, verbose: bool) -> dict[str, Any]:
@@ -1165,27 +1187,34 @@ def run_agent(user_input: str, output_dir: str, news_limit: int, verbose: bool) 
         "llm_metadata": [],
     }
 
-    # Step 1 — LLM
+    # Step 1: Parse and validate the user's ticker/asset request
     step_1_parse_request(state, verbose)
 
     if not state["parsed_request"].get("is_valid"):
         invalid_input_report(state, verbose)
     else:
-        # Step 2 — Tool
+        # Step 2: Fetch live market data (also stores historical close series in state)
         step_2_fetch_market_data(state, verbose)
-        # Step 2b — Tool
+
+        # Step 2b: Compute technical indicators from the historical series — pure tool, no LLM
         step_2b_compute_technicals(state, verbose)
-        # Step 3 — Tool
+
+        # Step 3: Fetch recent news headlines
         step_3_fetch_headlines(state, verbose, news_limit)
-        # Step 4 — LLM
+
+        # Step 4: Classify headline sentiment — LLM reads text, not numbers
         step_4_analyze_sentiment(state, verbose)
-        # Step 5 — LLM
+
+        # Step 5: Reconcile technicals + market data + sentiment — the hard reasoning step
         step_5_reconcile_signals(state, verbose)
-        # Step 6 — LLM
+
+        # Step 6: Draft a recommendation from the reconciled picture
         step_6_draft_recommendation(state, verbose)
-        # Step 7 — LLM
+
+        # Step 7: Steelman the opposite case — critique the draft
         step_7_critique_recommendation(state, verbose)
-        # Step 8 — LLM
+
+        # Step 8: Final report that responds to the critique and locks in the call
         step_8_final_report(state, verbose)
 
     state["output_files"] = write_outputs(state, output_dir)
@@ -1197,12 +1226,16 @@ def run_agent(user_input: str, output_dir: str, news_limit: int, verbose: bool) 
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Groq Llama stock/crypto analysis agent.")
+    parser = argparse.ArgumentParser(description="Groq Llama stock/crypto analysis agent with technicals and self-critique.")
     parser.add_argument("query", nargs="+", help='Example: "Analyze AAPL short term"')
     parser.add_argument("--output-dir", default="outputs")
     parser.add_argument("--news-limit", type=int, default=DEFAULT_NEWS_LIMIT)
+    parser.add_argument("--api-key", help="Groq API key (overrides GROQ_API_KEY env var)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
+
+    if args.api_key:
+        os.environ["GROQ_API_KEY"] = args.api_key
 
     try:
         state = run_agent(" ".join(args.query), args.output_dir, args.news_limit, args.verbose)
