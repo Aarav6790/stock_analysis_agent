@@ -12,6 +12,18 @@ The agent works through a series of sequential steps—from data ingestion and t
 
 ---
 
+## Setup & Installation
+
+**1. Install Requirements**
+
+The project uses only the Python standard library. You can ensure your environment is ready by running:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
 ## Inputs the Agent Handles
 
 The agent is designed to resolve various types of user input into actionable market data queries:
@@ -32,16 +44,6 @@ The agent integrates several external and internal tools to ensure data accuracy
 -   **Technical Analysis Engine**: A pure-Python tool that computes RSI, MACD, Bollinger Bands, and Moving Averages without relying on LLM arithmetic.
 
 ---
-
-## Setup & Installation
-
-**1. Install Requirements**
-
-The project uses only the Python standard library. You can ensure your environment is ready by running:
-
-```bash
-pip install -r requirements.txt
-```
 
 ## Running the Agent
 
