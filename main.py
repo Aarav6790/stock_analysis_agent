@@ -167,13 +167,7 @@ def trace_step(
     if verbose:
         print(f"\nStep {number}: {name} ({kind})")
         print(pretty_json(output_data))
-# ---------------------------------------------------------------------------
-# Numeric field normalisation
-#
-# Llama (and most LLMs) default to 0-1 floats for "confidence" and similar
-# fields even when the prompt says 0-100. We fix this post-call rather than
-# hoping the model complies, since it affects every downstream step.
-# ---------------------------------------------------------------------------
+# Numeric field normalisation: convert 0-1 floats to 0-100 integers.
 
 def _normalise_confidence_fields(output: dict[str, Any], fields: list[str]) -> dict[str, Any]:
     """Convert 0-1 floats to 0-100 integers for any confidence-style field."""
@@ -416,14 +410,7 @@ def step_2_fetch_market_data(state: dict[str, Any], verbose: bool) -> None:
     trace_step(state, 2, "Tool fetch market data", "tool", {"parsed_request": parsed}, trace_output, verbose)
 
 
-# ---------------------------------------------------------------------------
-# Step 2b — Tool: compute technical indicators from the historical series
-#
-# This is a pure-Python computation tool. No LLM call, no network request.
-# It takes the raw close/volume series stored in state["market_data"] and
-# produces a structured dict of well-known indicators that the LLM in Step 5
-# can reason about directly, rather than being handed a bare price number.
-# ---------------------------------------------------------------------------
+# Step 2b — Tool: compute technical indicators (RSI, MACD, etc.)
 
 def _sma(series: list[float], period: int) -> float | None:
     if len(series) < period:
@@ -688,17 +675,7 @@ def step_4_analyze_sentiment(state: dict[str, Any], verbose: bool) -> None:
     trace_step(state, 4, "LLM analyze headline sentiment", "llm", payload, output, verbose)
 
 
-# ---------------------------------------------------------------------------
-# Step 5 — LLM: reconcile technicals, market data, and sentiment
-#
-# The key design change from the original: this step now receives the
-# pre-computed technical indicators from Step 2b as concrete numbers with
-# plain-English signals already attached. The LLM's job is genuine
-# multi-signal reconciliation — deciding whether the three sources
-# (technicals, market data, sentiment) agree or contradict — rather than
-# interpreting a bare price figure. This is the step that most benefits
-# from being a separate LLM call.
-# ---------------------------------------------------------------------------
+# Step 5 — LLM: reconcile technicals, market data, and sentiment signals
 
 def step_5_reconcile_signals(state: dict[str, Any], verbose: bool) -> None:
     system = (
@@ -778,16 +755,7 @@ def step_6_draft_recommendation(state: dict[str, Any], verbose: bool) -> None:
     trace_step(state, 6, "LLM draft recommendation", "llm", payload, output, verbose)
 
 
-# ---------------------------------------------------------------------------
-# Step 7 — LLM: confidence audit
-#
-# This step audits whether the draft's stated confidence is actually justified
-# by the evidence. It is NOT forced to argue the opposite case — if signals
-# are strongly aligned, it should say so and apply little or no penalty.
-# The penalty is proportional to real gaps: contradicting signals, thin data,
-# ignored risks. Vague market uncertainty does not count. A single prompt
-# cannot audit its own confidence, but a chained call can do it honestly.
-# ---------------------------------------------------------------------------
+# Step 7 — LLM: audit confidence and evidence
 
 def step_7_critique_recommendation(state: dict[str, Any], verbose: bool) -> None:
     draft = state["draft_report"]
