@@ -24,27 +24,6 @@ pip install -r requirements.txt
 
 ---
 
-## Inputs the Agent Handles
-
-The agent is designed to resolve various types of user input into actionable market data queries:
-
--   **Stock Tickers**: `AAPL`, `NVDA`, `TSLA`, `SPY`, etc.
--   **Cryptocurrencies**: `Bitcoin`, `ETH`, `Solana`, `BTC`, etc.
--   **Natural Language**: `"Should I buy Apple?"`, `"Analyze gold ETF"`, `"What do you think about BTC short term?"` — The agent automatically resolves these to their canonical tickers.
-
----
-
-## Tools & Data Sources
-
-The agent integrates several external and internal tools to ensure data accuracy and depth:
-
--   **Yahoo Finance API**: Fetches real-time price and historical chart data for stocks and ETFs.
--   **CoinGecko API**: Retrieves market data and OHLC series for cryptocurrencies.
--   **Google News RSS**: Gathers recent headlines (last 14 days) for sentiment analysis.
--   **Technical Analysis Engine**: A pure-Python tool that computes RSI, MACD, Bollinger Bands, and Moving Averages without relying on LLM arithmetic.
-
----
-
 ## Running the Agent
 
 ### Quick Run (One-off)
@@ -81,6 +60,27 @@ python main.py "What do you think about ETH?" --output-dir my_crypto_reports
 | `--output-dir` | `outputs/` | Directory where report files will be saved |
 | `--news-limit` | `6` | Number of news headlines to fetch for sentiment analysis |
 | `--verbose` | `off` | Print detailed step-by-step trace to the terminal |
+
+---
+
+## Inputs the Agent Handles
+
+The agent is designed to resolve various types of user input into actionable market data queries:
+
+-   **Stock Tickers**: `AAPL`, `NVDA`, `TSLA`, `SPY`, etc.
+-   **Cryptocurrencies**: `Bitcoin`, `ETH`, `Solana`, `BTC`, etc.
+-   **Natural Language**: `"Should I buy Apple?"`, `"Analyze gold ETF"`, `"What do you think about BTC short term?"` — The agent automatically resolves these to their canonical tickers.
+
+---
+
+## Tools & Data Sources
+
+The agent integrates several external and internal tools to ensure data accuracy and depth:
+
+-   **Yahoo Finance API**: Fetches real-time price and historical chart data for stocks and ETFs.
+-   **CoinGecko API**: Retrieves market data and OHLC series for cryptocurrencies.
+-   **Google News RSS**: Gathers recent headlines (last 14 days) for sentiment analysis.
+-   **Technical Analysis Engine**: A pure-Python tool that computes RSI, MACD, Bollinger Bands, and Moving Averages without relying on LLM arithmetic.
 
 ---
 
